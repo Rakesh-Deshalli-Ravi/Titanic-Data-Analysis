@@ -1,0 +1,385 @@
+---
+author: "Rakesh Deshalli Ravi"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## Installing and Loading libraries
+
+```{r Packages}
+# install.packages("psych")
+library(dplyr)
+library(psych)
+library(ggplot2)
+library(fastDummies)
+library(caret)
+library(factoextra)
+library(kknn)
+library(pROC)
+```
+
+
+## Loading datasets
+
+I have taken titanic dataset and split into two csv files.
+One is Survived and other is not survived.
+
+```{r Data loading into dataframes}
+df_survived = read.csv('survived_titanic.csv')
+df_not_survived = read.csv('not_survived_titanic.csv')
+```
+
+
+Merging dataframes
+
+```{r Data Merging}
+titanic_df <- full_join(df_survived, df_not_survived)
+```
+
+## Data Exploration
+
+```{r Head and Summary of the Data}
+head(titanic_df)
+summary(titanic_df)
+```
+
+From the above head, we can see first 6 records and the information in the data, which gives us a high level understanding of the data.
+And from the summary, it's clear that Age column has 177 null values. Apart from that no other columns has null values.
+
+```{r Column names}
+names(titanic_df)
+```
+Here, I am printing the column names of the data.
+
+
+Describe function gives more detailed summary of the data
+
+```{r Describe function}
+describe(titanic_df)
+```
+
+From the above table, we could say that describe function gives more detailed summary of the data. As it includes, range, skew, kurtosis and few other parameters.
+
+
+## Data Cleaning
+
+Firstly, I wanted to clean the data to make sure it has no missing values and unnecessary features are removed. So, we can move forward to Exploration, Visualization and pre-processing steps.
+
+Handling missing values
+
+```{r Plotting Age}
+ggplot(titanic_df, aes(Age)) + geom_histogram(binwidth = 10)
+```
+As the data distribution looks like normal distribution. And there is no much skew in the Age feature, I am planning to replace null values with Mean of the Age variable.
+
+```{r Replacing null values in Age column with mean of the Age variable}
+titanic_df <- titanic_df %>%
+  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm = TRUE), Age))
+summary(titanic_df)
+```
+After replacing null values with mean of the variable, it clear from the above summary table there is no null values left in the dataframe.
+
+But there are few empty values in Embarked and Cabin columns in the dataframe. As we keep Embarked column for further processing lets handle that inconsistency by replacing it with mode. As the column is categorical.
+
+```{r Handling inconsistent values}
+mode_value <- names(sort(table(titanic_df$Embarked), decreasing = TRUE))[1]
+
+titanic_df$Embarked[titanic_df$Embarked == ""] <- mode_value
+```
+
+
+
+
+
+
+There are few other columns which are not so useful in our modeling. For eg: columns like X: index, PassengerId: Id, which has unique values for all the records. These columns won't give much information. So, I am dropping few columns from the dataframe.
+
+
+Dropping columns
+
+```{r Dropping unwanted columns in a dataframe}
+titanic_df <- subset(titanic_df, select = -c(X, PassengerId, Name, Ticket, Cabin))
+```
+
+
+```{r After dropping unwanted columns}
+titanic_df
+```
+
+## Data Visualization
+
+Uni-variate Analysis
+
+```{r Bar plots}
+ggplot(titanic_df, aes(Sex)) + geom_bar()
+ggplot(titanic_df, aes(Embarked)) + geom_bar()
+ggplot(titanic_df, aes(Survived)) + geom_bar()
+ggplot(titanic_df, aes(Pclass)) + geom_bar()
+ggplot(titanic_df, aes(SibSp)) + geom_bar()
+ggplot(titanic_df, aes(Parch)) + geom_bar()
+```
+
+```{r Histograms}
+hist(titanic_df$Age)
+hist(titanic_df$Fare)
+```
+
+Bi-variate Analysis
+
+```{r Box plots}
+
+ggplot(titanic_df, aes(x=as.factor(Survived), y=Fare)) + 
+    geom_boxplot() +
+  xlab("Survived")
+ggplot(titanic_df, aes(x=as.factor(Survived), y=Age)) + 
+    geom_boxplot() +
+  xlab("Survived")
+ggplot(titanic_df, aes(x=as.factor(Pclass), y=Fare)) + 
+    geom_boxplot() +
+  xlab("Pclass")
+
+```
+
+```{r Cross tabs}
+print('Cross tab for Class and Survival')
+class_cross_tab <- table(titanic_df$Pclass, titanic_df$Survived)
+colnames(class_cross_tab) <- c("Not Survived", "Survived")
+rownames(class_cross_tab) <- c("Pclass 1", "Pclass 2",'Pclass 3')
+print(class_cross_tab)
+
+print('Cross tab for Sex and Survival')
+sex_cross_tab <- table(titanic_df$Sex, titanic_df$Survived)
+colnames(sex_cross_tab) <- c("Not Survived", "Survived")
+print(sex_cross_tab)
+
+print('Cross tab for Embarked and Survival')
+embarked_cross_tab <- table(titanic_df$Embarked, titanic_df$Survived)
+colnames(embarked_cross_tab) <- c("Not Survived", "Survived")
+print(embarked_cross_tab)
+```
+## Data Transformation
+
+```{r Creating dummy columns}
+titanic_df = dummy_cols(titanic_df, select_columns = ('Sex'), 
+                            remove_first_dummy = TRUE)
+titanic_df = dummy_cols(titanic_df, select_columns = ('Embarked'), 
+                            remove_first_dummy = TRUE)
+titanic_df <- titanic_df %>% select(-c('Sex','Embarked'))
+```
+
+
+```{r After creating dummies}
+titanic_df
+```
+
+Now, I have all the numerical columns in the dataframe, And I will work on binning of the age group to make three bins like Kids, Adults and Seniors. 
+
+```{r}
+titanic_df$Age_group = cut(titanic_df$Age, breaks = c(0, 18, 55, 100))
+titanic_df = dummy_cols(titanic_df, select_columns = ('Age_group'), 
+                            remove_first_dummy = TRUE)
+titanic_df = select(titanic_df,-c(Age, Age_group))
+```
+
+
+```{r After binning}
+titanic_df
+```
+I will do Normalization at the time of model training
+
+## Clustering
+
+```{r Removing class label}
+titanic_df_clustering = select(titanic_df, -c('Survived'))
+```
+
+```{r Data Normalization}
+# Set seed
+set.seed(123)
+# Center scale allows us to standardize the data 
+preproc <- preProcess(titanic_df_clustering, method=c("center", "scale"))
+# We have to call predict to fit our data based on preprocessing
+titanic_df_clustering <- predict(preproc, titanic_df_clustering)
+```
+
+```{r After Normalization}
+titanic_df_clustering
+```
+
+```{r Plots to find optimal number of clusters}
+# Find the knee
+fviz_nbclust(titanic_df_clustering, kmeans, method = "wss")
+fviz_nbclust(titanic_df_clustering, kmeans, method = "silhouette")
+```
+From knee plot, there is no specific knee that can be located. But from silhouette plot, I could say that it can have k= 2 which can be optimal.
+
+```{r Training k-means}
+# Fit the data
+fit <- kmeans(titanic_df_clustering, centers = 2, nstart = 25)
+# Display the kmeans object information
+fit
+```
+
+
+```{r Cluster Display}
+# Display the cluster plot
+fviz_cluster(fit, data = titanic_df_clustering)
+```
+
+```{r PCA}
+# Calculate PCA
+pca = prcomp(titanic_df_clustering)
+# Save as dataframe
+rotated_data = as.data.frame(pca$x)
+# Assign clusters as a new column
+rotated_data$Clusters = as.factor(fit$cluster)
+# Plot and color by labels
+ggplot(data = rotated_data, aes(x = PC1, y = PC2, col = Clusters)) + geom_point()
+```
+
+```{r Cluster vs Actual Labels}
+# Create a dataframe
+result <- data.frame(Actual = titanic_df$Survived, KmeansCluster = fit$cluster)
+# View the first 100 cases one by one
+head(result, n = 10)
+```
+
+```{r Kmeans Cross tab}
+# Crosstab for Kmeans
+result %>% group_by(KmeansCluster) %>% select(KmeansCluster, Actual) %>% table()
+```
+
+## Classification
+
+```{r Data Partition to train set}
+# Partition the data
+index = createDataPartition(y=titanic_df$Survived, p=0.7, list=FALSE)
+# Everything in the generated index list
+train_set = titanic_df[index,]
+```
+
+
+```{r Data Partition to test set}
+# Everything except the generated indices
+test_set = titanic_df[-index,]
+```
+
+
+```{r SVM model training}
+set.seed(123)
+# Evaluation method parameter
+train_control = trainControl(method = "cv", number = 10, classProbs =  TRUE)
+
+grid <- expand.grid(C = 10^seq(-5,2,0.5))
+
+# Converting 0 and 1 to Died and Survived
+train_set$Survived <- ifelse(train_set$Survived == 0, 'Died', 'Survived')
+test_set$Survived <- ifelse(test_set$Survived == 0, 'Died', 'Survived')
+# Setting levels
+train_set$Survived <- factor(train_set$Survived, levels = c('Died', 'Survived'))
+test_set$Survived <- factor(test_set$Survived, levels = c('Died', 'Survived'))
+
+# Fit the model
+svm_grid <- train(Survived ~., data = train_set, method = "svmLinear", 
+              trControl = train_control, tuneGrid = grid)
+# View grid search result
+svm_grid
+```
+Accuracy of SVM model is 80.79% at c = 0.01
+
+```{r SVM Accuracy}
+# Predict with test set
+svm_pred <- predict(svm_grid, test_set)
+svm_accuracy = sum(svm_pred == test_set$Survived) / nrow(test_set)
+svm_accuracy
+```
+Accuracy of test data of SVM model is 73.78%
+
+```{r Scree plot}
+set.seed(123)
+ctrl <- trainControl(method="cv", number = 10) 
+knnFit <- train(Survived ~ ., data = train_set, 
+                method = "knn", 
+                trControl = ctrl, 
+                preProcess = c("center","scale"),
+                tuneLength = 15)
+
+# Show a plot of accuracy vs k 
+plot(knnFit)
+
+```
+
+Plot to compare the K  value and get the best K value visually.
+
+```{r Model Training KNN}
+set.seed(123)
+
+# Remember scaling is crucial for KNN
+ctrl <- trainControl(method="cv", number = 10) 
+
+# setup a tuneGrid with the tuning parameters
+tuneGrid <- expand.grid(kmax = 3:7,                        # test a range of k values 3 to 7
+                        kernel = c("rectangular", "cos"),  # regular and cosine-based distance functions
+                        distance = 1:3)                    # powers of Minkowski 1 to 3
+
+# tune and fit the model with 10-fold cross validation,
+# standardization, and our specialized tune grid
+kknn_fit <- train(Survived ~ ., 
+                  data = train_set,
+                  method = 'kknn',
+                  trControl = ctrl,
+                  preProcess = c('center', 'scale'),
+                  tuneGrid = tuneGrid)
+
+# Printing trained model provides report
+kknn_fit
+
+```
+From the above stats, model is good at following parameters: kmax = 7, distance = 2 and kernel = cos. Accuracy is 85.2%
+
+
+## Evaluation
+
+```{r Accuracy KNN}
+knn_pred <- predict(kknn_fit, test_set)
+knn_accuracy = sum(knn_pred == test_set$Survived) / nrow(test_set)
+knn_accuracy
+```
+
+```{r Confusion matrix KNN}
+confusion_matrix <- confusionMatrix(test_set$Survived, knn_pred)
+confusion_matrix
+```
+From the above confusion matrix, I could say that 36  passengers who were died are predicted incorrectly as survived by the KNN model. And model is performing overall almost similarly on both classes.
+
+
+```{r Evaluation metrics KNN}
+Precision_manual = 144/ (144+25) # TP/TP + FP
+Recall_manual = 144/ (144+36) # TP/TP + FN
+Precision_manual
+Recall_manual
+```
+Both precision and recall are good but precision is slightly higher than recall. So, we could say that our model is performing well on both the classes.
+
+
+```{r ROC Curve}
+pred_prob <- predict(knnFit, test_set, type = "prob")
+# And now we can create an ROC curve for our model.
+roc_obj <- roc((test_set$Survived), pred_prob[,1])
+plot(roc_obj, print.auc=TRUE)
+```
+
+
+
+From the above ROC curve, we could say that model is performing better and we can also see the trade off between specificity and sensitivity.
+
+
+## Report and Reflection
+
+Report:
+From my data analysis, I understood that there are more chances of survival for a passenger, if they have booked their seat in certain class and embarked at a certain station. And from the application of models, I realized that model performance varies based on the selection of algorithm and parameters.
+
+Reflection:
+From this course, I got a clearer picture what Data Scientists do in a tech company. I also understood key concepts to clean and transform the data into required format using R programming. I also learnt, how to improve the performance of machine learning algorithms along with that I got deeper understanding on the math concepts behind the algorithms. Finally, I would like to tell that the applications of Machine Learning that I got to know in this class are really interesting.
+
+
